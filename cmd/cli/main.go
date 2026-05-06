@@ -31,6 +31,8 @@ func main() {
 		err = commands.RunCheck()
 	case "rm":
 		err = commands.RunRm()
+	case "prune":
+		err = commands.RunPrune()
 	case "remote":
 		err = runRemote()
 	case "help":

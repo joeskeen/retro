@@ -63,6 +63,18 @@ go build -o retro ./cmd/cli
 | `retro remote add <name> <url>` | Add a remote registry |
 | `retro remote list` | List configured remotes |
 
+## Requirements
+
+- **git** - https://git-scm.com
+- **git lfs** - https://git-lfs.github.com (run `git lfs install`)
+- **DOSBox** or other platform emulators for running games
+
+## Supported Git Hosts
+
+- GitHub (2 GB free LFS per repo)
+- GitLab (10 GiB free LFS per project)
+- Gitea and other Git servers (self-hosted)
+
 ## Configuration
 
 Remotes are stored in `~/.retro/config.toml`:
@@ -72,6 +84,9 @@ default-remote = "my-games"
 
 [remote "my-games"]
 url = "git@github.com:username/my-games.git"
+
+[remote "my-gitlab"]
+url = "git@gitlab.com:username/my-games.git"
 ```
 
 ## Supported Platforms

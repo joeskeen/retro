@@ -180,8 +180,8 @@ mount C %s
 C:
 CD %s
 %s
-exit
-`, workDir, installDir, installCmd)
+%s
+`, workDir, installDir, installCmd, pauseCmd())
 
 	if err := os.WriteFile(configPath, []byte(config), 0644); err != nil {
 		return "", err
@@ -266,6 +266,13 @@ func (p *DOSBoxPlatform) extractTar(destDir string, data []byte) error {
 	return nil
 }
 
+func pauseCmd() string {
+	if os.Getenv("RETRO_PAUSE") == "1" {
+		return "pause\nexit"
+	}
+	return "exit"
+}
+
 func dosDir(path string) string {
 	if strings.Contains(path, ":") {
 		parts := strings.Split(path, ":")
@@ -323,8 +330,8 @@ mount C %s
 C:
 CD %s
 %s
-exit
-`, imageDir, workDir, dosBase(m.Entrypoint))
+%s
+`, imageDir, workDir, dosBase(m.Entrypoint), pauseCmd())
 
 	return os.WriteFile(configPath, []byte(config), 0644)
 }

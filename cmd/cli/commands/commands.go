@@ -271,7 +271,7 @@ func RunPush() error {
 			continue
 		}
 		if err := t.AddLayer(layerSHA, data); err != nil {
-			fmt.Printf("Warning: failed to add layer %s: %v\n", layerSHA[:8], err)
+			return fmt.Errorf("failed to add layer %s: %v", layerSHA[:8], err)
 		}
 	}
 
@@ -500,4 +500,64 @@ func parseImageRef(ref string) (string, string) {
 		}
 	}
 	return name, tag
+}
+
+func RunPrune() error {
+	if len(os.Args) < 3 {
+		return fmt.Errorf("usage: retro prune [--remote <remote>]")
+	}
+
+	remoteName := ""
+	for i := 2; i < len(os.Args); i++ {
+		if os.Args[i] == "--remote" && i+1 < len(os.Args) {
+			remoteName = os.Args[i+1]
+			i++
+		}
+	}
+
+	cfgPath := getConfigPath()
+	var remote *config.Remote
+
+	if remoteName == "" {
+		cfg, err := config.Load(cfgPath)
+		if err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("failed to load config: %w", err)
+		}
+		if cfg != nil {
+			remote, err = cfg.GetDefaultRemote()
+			if err != nil {
+				return fmt.Errorf("no remote specified and no default set")
+			}
+		}
+	} else {
+		cfg, err := config.Load(cfgPath)
+		if err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("failed to load config: %w", err)
+		}
+		if cfg != nil {
+			remote, err = cfg.GetRemote(remoteName)
+			if err != nil {
+				return fmt.Errorf("remote not found: %s", remoteName)
+			}
+		}
+	}
+
+	if remote == nil {
+		return fmt.Errorf("no remote specified")
+	}
+
+	gitPath := filepath.Join(getRegistryPath(), "git", remote.Name)
+	t := git.New(remote.URL, gitPath)
+
+	if err := t.CloneOrOpen(); err != nil {
+		return fmt.Errorf("failed to clone/open repo: %w", err)
+	}
+
+	pruned, err := t.Prune()
+	if err != nil {
+		return fmt.Errorf("prune failed: %w", err)
+	}
+
+	fmt.Printf("Pruned %d unreferenced layers from %s\n", pruned, remote.Name)
+	return nil
 }
