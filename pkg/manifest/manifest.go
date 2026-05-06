@@ -7,14 +7,15 @@ import (
 )
 
 type Manifest struct {
-	Name       string   `json:"name"`
-	Tag        string   `json:"tag"`
-	Runtime    string   `json:"runtime"`
-	BaseImage  string   `json:"baseImage"`
-	Layers     []string `json:"layers"`
-	Entrypoint string   `json:"entrypoint"`
-	WorkingDir string   `json:"workingDir,omitempty"`
-	Install    string   `json:"install,omitempty"`
+	Name        string            `json:"name"`
+	Tag         string            `json:"tag"`
+	Runtime     string            `json:"runtime"`
+	BaseImage   string            `json:"baseImage"`
+	Layers      []string          `json:"layers"`
+	Entrypoint  string            `json:"entrypoint"`
+	WorkingDir  string            `json:"workingDir,omitempty"`
+	Install     string            `json:"install,omitempty"`
+	BaselineSHA map[string]string `json:"baselineSHA,omitempty"`
 }
 
 func (m *Manifest) Save(path string) error {

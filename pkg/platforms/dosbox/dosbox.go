@@ -34,6 +34,110 @@ func (p *DOSBoxPlatform) Name() string {
 	return "dosbox"
 }
 
+func (p *DOSBoxPlatform) Run(m *manifest.Manifest) error {
+	saveDir := filepath.Join(os.Getenv("HOME"), ".retro", "saves", m.Name+"-"+m.Tag)
+	if err := os.MkdirAll(saveDir, 0755); err != nil {
+		return fmt.Errorf("failed to create save directory: %w", err)
+	}
+
+	imageDir, err := p.extractLayers(m)
+	if err != nil {
+		return fmt.Errorf("failed to extract layers: %w", err)
+	}
+
+	configPath := filepath.Join(imageDir, "dosbox.conf")
+	if err := p.generateDOSBoxConfig(m, imageDir, configPath); err != nil {
+		return err
+	}
+
+	cmd := exec.Command("dosbox", "-conf", configPath)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+
+	if err := cmd.Run(); err != nil {
+		fmt.Printf("Game exited with error: %v\n", err)
+	}
+
+	if err := p.extractSaves(imageDir, saveDir, m.BaselineSHA); err != nil {
+		fmt.Printf("Warning: failed to extract saves: %v\n", err)
+	}
+
+	return nil
+}
+
+func (p *DOSBoxPlatform) extractSaves(imageDir, saveDir string, baselineSHA map[string]string) error {
+	savedFiles, err := p.findNewOrModifiedFiles(imageDir, baselineSHA)
+	if err != nil {
+		return err
+	}
+
+	for _, file := range savedFiles {
+		relPath, err := filepath.Rel(imageDir, file)
+		if err != nil {
+			continue
+		}
+		destPath := filepath.Join(saveDir, relPath)
+		if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+			return err
+		}
+		if err := copyFile(file, destPath); err != nil {
+			return err
+		}
+		fmt.Printf("Saved: %s\n", relPath)
+	}
+
+	return nil
+}
+
+func (p *DOSBoxPlatform) findNewOrModifiedFiles(imageDir string, baselineSHA map[string]string) ([]string, error) {
+	currentFiles := make(map[string]string)
+	if err := filepath.Walk(imageDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return err
+		}
+		relPath, err := filepath.Rel(imageDir, path)
+		if err != nil {
+			return err
+		}
+		if relPath == "dosbox.conf" || relPath == ".retro-manifest" {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		sha := layers.ComputeSHA256(data)
+		currentFiles[relPath] = sha
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+
+	if len(baselineSHA) == 0 {
+		return nil, nil
+	}
+
+	var savedFiles []string
+	for path, sha := range currentFiles {
+		baselineFileSHA, existed := baselineSHA[path]
+		if !existed || baselineFileSHA != sha {
+			fullPath := filepath.Join(imageDir, path)
+			savedFiles = append(savedFiles, fullPath)
+		}
+	}
+
+	return savedFiles, nil
+}
+
+func copyFile(src, dest string) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dest, data, 0644)
+}
+
 func (p *DOSBoxPlatform) PrepareInstall(layerSHAs []string, installCmd string) (string, error) {
 	workDir, err := os.MkdirTemp("", "retro-install-")
 	if err != nil {
@@ -84,25 +188,6 @@ exit
 	}
 
 	return configPath, nil
-}
-
-func (p *DOSBoxPlatform) Run(m *manifest.Manifest) error {
-	imageDir, err := p.extractLayers(m)
-	if err != nil {
-		return err
-	}
-
-	configPath := filepath.Join(imageDir, "dosbox.conf")
-	if err := p.generateDOSBoxConfig(m, imageDir, configPath); err != nil {
-		return err
-	}
-
-	cmd := exec.Command("dosbox", "-conf", configPath)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Stdin = os.Stdin
-
-	return cmd.Run()
 }
 
 func (p *DOSBoxPlatform) extractLayers(m *manifest.Manifest) (string, error) {
@@ -186,18 +271,40 @@ func dosDir(path string) string {
 		parts := strings.Split(path, ":")
 		path = parts[1]
 	}
-	lastSlash := strings.LastIndex(path, "\\")
-	if lastSlash < 0 {
-		lastSlash = strings.LastIndex(path, "/")
+	lastSlash := -1
+	for i := len(path) - 1; i >= 0; i-- {
+		if path[i] == '\\' || path[i] == '/' {
+			lastSlash = i
+			break
+		}
 	}
 	if lastSlash < 0 {
 		return path
 	}
-	return path[:lastSlash]
+	dir := path[:lastSlash]
+	for i := len(dir) - 1; i >= 0; i-- {
+		if dir[i] == '\\' || dir[i] == '/' {
+			return dir[i+1:]
+		}
+	}
+	return dir
 }
 
 func dosPath(path string) string {
 	path = strings.ReplaceAll(path, "/", "\\")
+	return path
+}
+
+func dosBase(path string) string {
+	if strings.Contains(path, ":") {
+		parts := strings.Split(path, ":")
+		path = parts[1]
+	}
+	for i := len(path) - 1; i >= 0; i-- {
+		if path[i] == '\\' || path[i] == '/' {
+			return path[i+1:]
+		}
+	}
 	return path
 }
 
@@ -217,7 +324,7 @@ C:
 CD %s
 %s
 exit
-`, imageDir, workDir, filepath.Base(m.Entrypoint))
+`, imageDir, workDir, dosBase(m.Entrypoint))
 
 	return os.WriteFile(configPath, []byte(config), 0644)
 }

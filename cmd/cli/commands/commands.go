@@ -167,6 +167,28 @@ func RunImages() error {
 	return nil
 }
 
+func RunRm() error {
+	if len(os.Args) < 3 {
+		return fmt.Errorf("usage: retro rm <image>")
+	}
+
+	imageRef := os.Args[2]
+	name, tag := parseImageRef(imageRef)
+	registryPath := getRegistryPath()
+	manifestPath := filepath.Join(registryPath, name, tag, "manifest.json")
+
+	if _, err := os.Stat(manifestPath); os.IsNotExist(err) {
+		return fmt.Errorf("image not found: %s:%s", name, tag)
+	}
+
+	if err := os.RemoveAll(filepath.Join(registryPath, name, tag)); err != nil {
+		return fmt.Errorf("failed to remove image: %w", err)
+	}
+
+	fmt.Printf("Removed %s:%s\n", name, tag)
+	return nil
+}
+
 func RunPush() error {
 	if len(os.Args) < 4 {
 		return fmt.Errorf("usage: retro push <image> [--remote <remote>]")

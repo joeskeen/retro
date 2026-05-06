@@ -29,6 +29,8 @@ func main() {
 		err = commands.RunClone()
 	case "check":
 		err = commands.RunCheck()
+	case "rm":
+		err = commands.RunRm()
 	case "remote":
 		err = runRemote()
 	case "help":
@@ -71,7 +73,7 @@ func runRemote() error {
 }
 
 func printUsage() {
-	fmt.Println(`RetroGame CLI - Docker-like game image system
+	fmt.Print(`RetroGame CLI - Docker-like game image system
 
 Usage:
   retro <command> [options]
@@ -79,6 +81,7 @@ Usage:
 Commands:
   build <path>       Build an image from a Retrofile
   run <image>        Run an image (format: name:tag)
+  rm <image>         Remove a local image
   clone <git-url>    Clone a registry from git
   push <image>       Push image to a remote registry
   pull <image>       Pull image from a remote registry
@@ -91,7 +94,7 @@ Run 'retro help' for more details.
 }
 
 func printRemoteUsage() {
-	fmt.Println(`Usage:
+	fmt.Print(`Usage:
   retro remote add <name> <url>     Add a remote registry
   retro remote list                 List configured remotes
   retro remote remove <name>        Remove a remote
