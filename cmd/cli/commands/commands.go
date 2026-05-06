@@ -10,6 +10,7 @@ import (
 	"retrogame/pkg/builder"
 	"retrogame/pkg/config"
 	"retrogame/pkg/parser"
+	"retrogame/pkg/platforms/dosbox"
 	"retrogame/pkg/registry"
 	"retrogame/pkg/runtime"
 	"retrogame/pkg/transport/git"
@@ -43,7 +44,8 @@ func RunBuild() error {
 	}
 
 	registryPath := getRegistryPath()
-	b := builder.NewBuilder(registryPath)
+	p := dosbox.New(registryPath)
+	b := builder.NewBuilder(registryPath, p)
 
 	m, err := b.Build(rf, contextPath)
 	if err != nil {

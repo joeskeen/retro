@@ -12,18 +12,76 @@ import (
 	"retrogame/pkg/layers"
 	"retrogame/pkg/manifest"
 	"retrogame/pkg/parser"
+	"retrogame/pkg/platforms"
 )
 
 type Builder struct {
 	registryPath string
 	layerManager *layers.Manager
+	platform     platforms.Platform
 }
 
-func NewBuilder(registryPath string) *Builder {
+func NewBuilder(registryPath string, platform platforms.Platform) *Builder {
 	return &Builder{
 		registryPath: registryPath,
 		layerManager: layers.NewManager(registryPath),
+		platform:     platform,
 	}
+}
+
+func (b *Builder) tarDirectoryWithPrefix(dirPath, prefix string) ([]byte, error) {
+	tmpFile, err := os.CreateTemp("", "retro-tar-*.tar")
+	if err != nil {
+		return nil, err
+	}
+	defer tmpFile.Close()
+	defer os.Remove(tmpFile.Name())
+
+	tw := tar.NewWriter(tmpFile)
+	prefix = strings.ReplaceAll(prefix, "\\", "/")
+	filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		relPath, err := filepath.Rel(dirPath, path)
+		if err != nil {
+			return err
+		}
+
+		if relPath == "." {
+			return nil
+		}
+
+		header, err := tar.FileInfoHeader(info, "")
+		if err != nil {
+			return err
+		}
+		relPath = strings.ReplaceAll(relPath, "\\", "/")
+		header.Name = prefix + "/" + relPath
+
+		if err := tw.WriteHeader(header); err != nil {
+			return err
+		}
+
+		if !info.IsDir() {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			if _, err := tw.Write(data); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
+	if err := tw.Close(); err != nil {
+		return nil, err
+	}
+
+	data, err := os.ReadFile(tmpFile.Name())
+	return data, err
 }
 
 func (b *Builder) Build(rf *parser.Retrofile, contextPath string) (*manifest.Manifest, error) {
@@ -101,6 +159,35 @@ func (b *Builder) Build(rf *parser.Retrofile, contextPath string) (*manifest.Man
 	return m, nil
 }
 
+func (b *Builder) runInstallStep(layerSHAs []string, installCmd string) (*layers.Layer, error) {
+	configPath, err := b.platform.PrepareInstall(layerSHAs, installCmd)
+	if err != nil {
+		return nil, err
+	}
+
+	fmt.Printf("Running installer: %s\n", installCmd)
+	cmd := exec.Command("dosbox", "-conf", configPath)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+
+	if err := cmd.Run(); err != nil {
+		fmt.Printf("Installer exited with error (may be normal): %v\n", err)
+	}
+
+	workDir := filepath.Dir(configPath)
+	modifiedData, err := b.tarDirectoryWithPrefix(workDir, "")
+	if err != nil {
+		return nil, err
+	}
+
+	return &layers.Layer{
+		Type:    layers.LayerTypeCopy,
+		SHA256:  layers.ComputeSHA256(modifiedData),
+		Content: string(modifiedData),
+	}, nil
+}
+
 func (b *Builder) createCopyLayer(instr parser.Instruction, contextPath string) (*layers.Layer, error) {
 	srcPath := filepath.Join(contextPath, instr.Source)
 
@@ -112,11 +199,6 @@ func (b *Builder) createCopyLayer(instr parser.Instruction, contextPath string) 
 	var data []byte
 	if srcInfo.IsDir() {
 		destDir := filepath.Base(instr.Dest)
-		destDir = strings.ReplaceAll(destDir, "\\", "/")
-		if len(destDir) > 1 && destDir[1] == ':' {
-			destDir = destDir[2:]
-		}
-		destDir = strings.Trim(destDir, "/")
 		data, err = b.tarDirectoryWithPrefix(srcPath, destDir)
 		if err != nil {
 			return nil, err
@@ -145,135 +227,6 @@ func (b *Builder) createCopyLayer(instr parser.Instruction, contextPath string) 
 		}
 		return layer, nil
 	}
-}
-
-func (b *Builder) tarDirectoryWithPrefix(dirPath, prefix string) ([]byte, error) {
-	tmpFile, err := os.CreateTemp("", "retro-tar-*.tar")
-	if err != nil {
-		return nil, err
-	}
-	defer tmpFile.Close()
-	defer os.Remove(tmpFile.Name())
-
-	tw := tar.NewWriter(tmpFile)
-	prefix = strings.ReplaceAll(prefix, "\\", "/")
-	filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-
-		relPath, err := filepath.Rel(dirPath, path)
-		if err != nil {
-			return err
-		}
-
-		if relPath == "." {
-			return nil
-		}
-
-		header, err := tar.FileInfoHeader(info, "")
-		if err != nil {
-			return err
-		}
-		relPath = strings.ReplaceAll(relPath, "\\", "/")
-		header.Name = prefix + "/" + relPath
-
-		if err := tw.WriteHeader(header); err != nil {
-			return err
-		}
-
-		if !info.IsDir() {
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			if _, err := tw.Write(data); err != nil {
-				return err
-			}
-		}
-
-		return nil
-	})
-	if err := tw.Close(); err != nil {
-		return nil, err
-	}
-
-	data, err := os.ReadFile(tmpFile.Name())
-	return data, err
-}
-
-func (b *Builder) runInstallStep(layerSHAs []string, installCmd string) (*layers.Layer, error) {
-	workDir, err := os.MkdirTemp("", "retro-install-")
-	if err != nil {
-		return nil, err
-	}
-	defer os.RemoveAll(workDir)
-
-	for _, sha := range layerSHAs {
-		layerPath := b.layerManager.GetLayerPath(sha)
-		data, err := os.ReadFile(layerPath)
-		if err != nil {
-			continue
-		}
-
-		fl, err := layers.DeserializeFileLayer(data)
-		if err != nil {
-			if isTarArchive(data) {
-				b.extractTar(workDir, data)
-			}
-			continue
-		}
-
-		destPath := filepath.Join(workDir, fl.Name)
-		if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
-			return nil, err
-		}
-		if err := os.WriteFile(destPath, fl.Content, 0644); err != nil {
-			return nil, err
-		}
-	}
-
-	configPath := filepath.Join(workDir, "dosbox-install.conf")
-	installDir := filepath.Dir(installCmd)
-	installDir = strings.ReplaceAll(installDir, "\\", "/")
-	if strings.Contains(installDir, ":") {
-		parts := strings.Split(installDir, ":")
-		installDir = parts[1]
-	}
-	installDir = strings.ReplaceAll(installDir, "/", "\\")
-
-	config := fmt.Sprintf(`[autoexec]
-mount C %s
-C:
-CD %s
-%s
-exit
-`, workDir, installDir, installCmd)
-
-	if err := os.WriteFile(configPath, []byte(config), 0644); err != nil {
-		return nil, err
-	}
-
-	fmt.Printf("Running installer: %s\n", installCmd)
-	cmd := exec.Command("dosbox", "-conf", configPath)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Stdin = os.Stdin
-
-	if err := cmd.Run(); err != nil {
-		fmt.Printf("Installer exited with error (may be normal): %v\n", err)
-	}
-
-	modifiedData, err := b.tarDirectoryWithPrefix(workDir, "")
-	if err != nil {
-		return nil, err
-	}
-
-	return &layers.Layer{
-		Type:    layers.LayerTypeCopy,
-		SHA256:  layers.ComputeSHA256(modifiedData),
-		Content: string(modifiedData),
-	}, nil
 }
 
 func isTarArchive(data []byte) bool {

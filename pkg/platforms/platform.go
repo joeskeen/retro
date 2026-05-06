@@ -7,4 +7,5 @@ import (
 type Platform interface {
 	Name() string
 	Run(m *manifest.Manifest) error
+	PrepareInstall(layerSHAs []string, installCmd string) (string, error)
 }

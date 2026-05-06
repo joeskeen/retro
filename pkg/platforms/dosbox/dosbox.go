@@ -34,6 +34,58 @@ func (p *DOSBoxPlatform) Name() string {
 	return "dosbox"
 }
 
+func (p *DOSBoxPlatform) PrepareInstall(layerSHAs []string, installCmd string) (string, error) {
+	workDir, err := os.MkdirTemp("", "retro-install-")
+	if err != nil {
+		return "", err
+	}
+
+	for _, sha := range layerSHAs {
+		layerPath := p.layerManager.GetLayerPath(sha)
+		data, err := os.ReadFile(layerPath)
+		if err != nil {
+			continue
+		}
+
+		if isTarArchive(data) {
+			if err := p.extractTar(workDir, data); err != nil {
+				return "", err
+			}
+			continue
+		}
+
+		fl, err := layers.DeserializeFileLayer(data)
+		if err != nil {
+			continue
+		}
+
+		destPath := filepath.Join(workDir, fl.Name)
+		if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+			return "", err
+		}
+		if err := os.WriteFile(destPath, fl.Content, 0644); err != nil {
+			return "", err
+		}
+	}
+
+	configPath := filepath.Join(workDir, "dosbox-install.conf")
+	installDir := dosDir(installCmd)
+
+	config := fmt.Sprintf(`[autoexec]
+mount C %s
+C:
+CD %s
+%s
+exit
+`, workDir, installDir, installCmd)
+
+	if err := os.WriteFile(configPath, []byte(config), 0644); err != nil {
+		return "", err
+	}
+
+	return configPath, nil
+}
+
 func (p *DOSBoxPlatform) Run(m *manifest.Manifest) error {
 	imageDir, err := p.extractLayers(m)
 	if err != nil {
@@ -70,12 +122,10 @@ func (p *DOSBoxPlatform) extractLayers(m *manifest.Manifest) (string, error) {
 			if err := p.extractTar(imageDir, data); err != nil {
 				return "", fmt.Errorf("failed to extract tar layer %s: %w", layerSHA, err)
 			}
-		} else if string(data) == m.Entrypoint {
-			continue
 		} else {
 			fl, err := layers.DeserializeFileLayer(data)
 			if err != nil {
-				return "", fmt.Errorf("failed to deserialize layer %s: %w", layerSHA, err)
+				continue
 			}
 
 			destPath := filepath.Join(imageDir, fl.Name)
