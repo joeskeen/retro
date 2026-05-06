@@ -333,8 +333,19 @@ func RunPull() error {
 	gitPath := filepath.Join(getRegistryPath(), "git", remote.Name)
 	t := git.New(remote.URL, gitPath)
 
+	if err := t.CloneOrOpen(); err != nil {
+		return fmt.Errorf("failed to clone/open repo: %w", err)
+	}
+
 	if err := t.Pull(); err != nil {
 		fmt.Printf("Warning: pull failed: %v\n", err)
+	}
+
+	if tag == "1.0" {
+		if availableTag := t.FindAvailableTag(name); availableTag != "" {
+			tag = availableTag
+			fmt.Printf("[pull] Using available tag: %s\n", tag)
+		}
 	}
 
 	data, err := t.GetManifest(name, tag)

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"strings"
 )
@@ -36,14 +37,52 @@ func convertToGitProtocol(url string) string {
 }
 
 func (t *Transport) CloneOrOpen() error {
-	if _, err := os.Stat(t.localPath); os.IsNotExist(err) {
+	gitDir := filepath.Join(t.localPath, ".git")
+	if _, err := os.Stat(gitDir); os.IsNotExist(err) {
+		if err := os.MkdirAll(t.localPath, 0755); err != nil {
+			return fmt.Errorf("failed to create registry directory: %w", err)
+		}
 		cmd := exec.Command("git", "clone", t.remoteURL, t.localPath)
+
+		if keyName := findDeployKey(t.remoteURL); keyName != "" {
+			cmd.Env = append(os.Environ(), "GIT_SSH_COMMAND=ssh -i ~/.ssh/"+keyName+" -o StrictHostKeyChecking=no")
+			fmt.Printf("[git transport] Using SSH key: %s\n", keyName)
+		} else {
+			fmt.Printf("[git transport] No deploy key found, using default SSH\n")
+		}
+
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("git clone failed: %s", string(out))
 		}
 	}
+
+	if _, err := os.Stat(gitDir); os.IsNotExist(err) {
+		return fmt.Errorf("not a git repository at %s", t.localPath)
+	}
 	return nil
+}
+
+func findDeployKey(url string) string {
+	usr, _ := user.Current()
+	sshPath := filepath.Join(usr.HomeDir, ".ssh")
+
+	entries, _ := os.ReadDir(sshPath)
+	var keys []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if strings.Contains(name, "deploy-key") || name == "id_rsa" || name == "id_ed25519" || strings.Contains(name, "_rsa") {
+			keys = append(keys, name)
+		}
+	}
+	fmt.Printf("[git transport] Available SSH keys: %v\n", keys)
+	if len(keys) > 0 {
+		return keys[0]
+	}
+	return ""
 }
 
 func (t *Transport) ensureLFS() error {
@@ -174,6 +213,9 @@ func (t *Transport) Push() error {
 	}
 
 	cmd = exec.Command("git", "-C", t.localPath, "push", "--force")
+	if keyName := findDeployKey(t.remoteURL); keyName != "" {
+		cmd.Env = append(os.Environ(), "GIT_SSH_COMMAND=ssh -i ~/.ssh/"+keyName+" -o StrictHostKeyChecking=no")
+	}
 	pushOut, pushErr := cmd.CombinedOutput()
 	if pushErr != nil {
 		return fmt.Errorf("git push failed: %s", string(pushOut))
@@ -187,6 +229,9 @@ func (t *Transport) Push() error {
 
 func (t *Transport) Pull() error {
 	cmd := exec.Command("git", "-C", t.localPath, "pull", "--rebase")
+	if keyName := findDeployKey(t.remoteURL); keyName != "" {
+		cmd.Env = append(os.Environ(), "GIT_SSH_COMMAND=ssh -i ~/.ssh/"+keyName+" -o StrictHostKeyChecking=no")
+	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("git pull failed: %s", string(out))
@@ -240,6 +285,20 @@ func (t *Transport) ListImages() ([]string, error) {
 		}
 	}
 	return images, nil
+}
+
+func (t *Transport) FindAvailableTag(imageName string) string {
+	manifestPath := filepath.Join(t.localPath, "manifests", imageName)
+	entries, err := os.ReadDir(manifestPath)
+	if err != nil || len(entries) == 0 {
+		return ""
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			return entry.Name()
+		}
+	}
+	return ""
 }
 
 func (t *Transport) Prune() (int, error) {
