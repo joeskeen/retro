@@ -1,0 +1,4 @@
+TAG cat:1.0
+FROM dosbox
+COPY CAT.BAT C:\
+ENTRYPOINT C:\CAT.BAT

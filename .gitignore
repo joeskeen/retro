@@ -1,0 +1,36 @@
+# Binaries
+retro
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of go coverage
+*.out
+
+# Dependency directories
+vendor/
+
+# Go workspace file
+go.work
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# RetroGame specific
+tmp/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Registry (local builds and downloaded content)
+registry/git/
+registry/layers/
