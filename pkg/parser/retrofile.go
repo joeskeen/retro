@@ -27,6 +27,7 @@ type Retrofile struct {
 	Copy       []Instruction
 	Entrypoint string
 	WorkingDir string
+	Install    string
 }
 
 func ParseRetrofile(path string) (*Retrofile, error) {
@@ -70,6 +71,8 @@ func ParseRetrofile(path string) (*Retrofile, error) {
 			rf.Entrypoint = args
 		case "WORKDIR":
 			rf.WorkingDir = args
+		case "INSTALL":
+			rf.Install = args
 		default:
 			return nil, fmt.Errorf("line %d: unknown instruction %s", lineNum+1, instr)
 		}

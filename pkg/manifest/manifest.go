@@ -14,6 +14,7 @@ type Manifest struct {
 	Layers     []string `json:"layers"`
 	Entrypoint string   `json:"entrypoint"`
 	WorkingDir string   `json:"workingDir,omitempty"`
+	Install    string   `json:"install,omitempty"`
 }
 
 func (m *Manifest) Save(path string) error {

@@ -131,16 +131,43 @@ func (p *DOSBoxPlatform) extractTar(destDir string, data []byte) error {
 	return nil
 }
 
+func dosDir(path string) string {
+	if strings.Contains(path, ":") {
+		parts := strings.Split(path, ":")
+		path = parts[1]
+	}
+	lastSlash := strings.LastIndex(path, "\\")
+	if lastSlash < 0 {
+		lastSlash = strings.LastIndex(path, "/")
+	}
+	if lastSlash < 0 {
+		return path
+	}
+	return path[:lastSlash]
+}
+
+func dosPath(path string) string {
+	path = strings.ReplaceAll(path, "/", "\\")
+	return path
+}
+
 func (p *DOSBoxPlatform) generateDOSBoxConfig(m *manifest.Manifest, imageDir, configPath string) error {
-	entrypointDir := filepath.Dir(m.Entrypoint)
-	entrypointDir = strings.ReplaceAll(entrypointDir, ":", "")
+	workDir := m.WorkingDir
+	if workDir == "" {
+		workDir = dosDir(m.Entrypoint)
+	} else if strings.Contains(workDir, ":") {
+		parts := strings.Split(workDir, ":")
+		workDir = parts[1]
+	}
+	workDir = dosPath(workDir)
 
 	config := fmt.Sprintf(`[autoexec]
 mount C %s
 C:
 CD %s
 %s
-`, imageDir, entrypointDir, filepath.Base(m.Entrypoint))
+exit
+`, imageDir, workDir, filepath.Base(m.Entrypoint))
 
 	return os.WriteFile(configPath, []byte(config), 0644)
 }

@@ -14,6 +14,7 @@ type LayerType string
 const (
 	LayerTypeCopy   LayerType = "copy"
 	LayerTypeConfig LayerType = "config"
+	LayerTypeBase   LayerType = "base"
 )
 
 type Layer struct {

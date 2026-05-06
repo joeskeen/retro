@@ -3,7 +3,9 @@ package builder
 import (
 	"archive/tar"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -38,6 +40,16 @@ func (b *Builder) Build(rf *parser.Retrofile, contextPath string) (*manifest.Man
 
 	layerSHAs := []string{}
 
+	baseImageLayer := &layers.Layer{
+		Type:    layers.LayerTypeBase,
+		Content: rf.BaseImage.Name,
+	}
+	baseImageLayer.SHA256 = layers.ComputeSHA256([]byte(baseImageLayer.Content))
+	layerSHAs = append(layerSHAs, baseImageLayer.SHA256)
+	if err := b.layerManager.StoreLayer(baseImageLayer); err != nil {
+		return nil, err
+	}
+
 	for _, copyInstr := range rf.Copy {
 		layer, err := b.createCopyLayer(copyInstr, contextPath)
 		if err != nil {
@@ -45,6 +57,17 @@ func (b *Builder) Build(rf *parser.Retrofile, contextPath string) (*manifest.Man
 		}
 		layerSHAs = append(layerSHAs, layer.SHA256)
 		if err := b.layerManager.StoreLayer(layer); err != nil {
+			return nil, err
+		}
+	}
+
+	if rf.Install != "" {
+		installLayer, err := b.runInstallStep(layerSHAs, rf.Install)
+		if err != nil {
+			return nil, fmt.Errorf("install step failed: %w", err)
+		}
+		layerSHAs = append(layerSHAs, installLayer.SHA256)
+		if err := b.layerManager.StoreLayer(installLayer); err != nil {
 			return nil, err
 		}
 	}
@@ -67,6 +90,7 @@ func (b *Builder) Build(rf *parser.Retrofile, contextPath string) (*manifest.Man
 		Layers:     layerSHAs,
 		Entrypoint: rf.Entrypoint,
 		WorkingDir: rf.WorkingDir,
+		Install:    rf.Install,
 	}
 
 	manifestPath := filepath.Join(imagePath, "manifest.json")
@@ -87,7 +111,13 @@ func (b *Builder) createCopyLayer(instr parser.Instruction, contextPath string) 
 
 	var data []byte
 	if srcInfo.IsDir() {
-		data, err = b.tarDirectory(srcPath)
+		destDir := filepath.Base(instr.Dest)
+		destDir = strings.ReplaceAll(destDir, "\\", "/")
+		if len(destDir) > 1 && destDir[1] == ':' {
+			destDir = destDir[2:]
+		}
+		destDir = strings.Trim(destDir, "/")
+		data, err = b.tarDirectoryWithPrefix(srcPath, destDir)
 		if err != nil {
 			return nil, err
 		}
@@ -117,7 +147,7 @@ func (b *Builder) createCopyLayer(instr parser.Instruction, contextPath string) 
 	}
 }
 
-func (b *Builder) tarDirectory(dirPath string) ([]byte, error) {
+func (b *Builder) tarDirectoryWithPrefix(dirPath, prefix string) ([]byte, error) {
 	tmpFile, err := os.CreateTemp("", "retro-tar-*.tar")
 	if err != nil {
 		return nil, err
@@ -126,7 +156,7 @@ func (b *Builder) tarDirectory(dirPath string) ([]byte, error) {
 	defer os.Remove(tmpFile.Name())
 
 	tw := tar.NewWriter(tmpFile)
-	dirName := filepath.Base(dirPath)
+	prefix = strings.ReplaceAll(prefix, "\\", "/")
 	filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -145,8 +175,8 @@ func (b *Builder) tarDirectory(dirPath string) ([]byte, error) {
 		if err != nil {
 			return err
 		}
-		header.Name = filepath.Join(dirName, relPath)
-		header.Name = filepath.ToSlash(header.Name)
+		relPath = strings.ReplaceAll(relPath, "\\", "/")
+		header.Name = prefix + "/" + relPath
 
 		if err := tw.WriteHeader(header); err != nil {
 			return err
@@ -164,10 +194,126 @@ func (b *Builder) tarDirectory(dirPath string) ([]byte, error) {
 
 		return nil
 	})
-	tw.Close()
+	if err := tw.Close(); err != nil {
+		return nil, err
+	}
 
 	data, err := os.ReadFile(tmpFile.Name())
 	return data, err
+}
+
+func (b *Builder) runInstallStep(layerSHAs []string, installCmd string) (*layers.Layer, error) {
+	workDir, err := os.MkdirTemp("", "retro-install-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(workDir)
+
+	for _, sha := range layerSHAs {
+		layerPath := b.layerManager.GetLayerPath(sha)
+		data, err := os.ReadFile(layerPath)
+		if err != nil {
+			continue
+		}
+
+		fl, err := layers.DeserializeFileLayer(data)
+		if err != nil {
+			if isTarArchive(data) {
+				b.extractTar(workDir, data)
+			}
+			continue
+		}
+
+		destPath := filepath.Join(workDir, fl.Name)
+		if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(destPath, fl.Content, 0644); err != nil {
+			return nil, err
+		}
+	}
+
+	configPath := filepath.Join(workDir, "dosbox-install.conf")
+	installDir := filepath.Dir(installCmd)
+	installDir = strings.ReplaceAll(installDir, "\\", "/")
+	if strings.Contains(installDir, ":") {
+		parts := strings.Split(installDir, ":")
+		installDir = parts[1]
+	}
+	installDir = strings.ReplaceAll(installDir, "/", "\\")
+
+	config := fmt.Sprintf(`[autoexec]
+mount C %s
+C:
+CD %s
+%s
+exit
+`, workDir, installDir, installCmd)
+
+	if err := os.WriteFile(configPath, []byte(config), 0644); err != nil {
+		return nil, err
+	}
+
+	fmt.Printf("Running installer: %s\n", installCmd)
+	cmd := exec.Command("dosbox", "-conf", configPath)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+
+	if err := cmd.Run(); err != nil {
+		fmt.Printf("Installer exited with error (may be normal): %v\n", err)
+	}
+
+	modifiedData, err := b.tarDirectoryWithPrefix(workDir, "")
+	if err != nil {
+		return nil, err
+	}
+
+	return &layers.Layer{
+		Type:    layers.LayerTypeCopy,
+		SHA256:  layers.ComputeSHA256(modifiedData),
+		Content: string(modifiedData),
+	}, nil
+}
+
+func isTarArchive(data []byte) bool {
+	return len(data) > 262 && data[257] == 'u' && data[258] == 's' && data[259] == 't' && data[260] == 'a' && data[261] == 'r'
+}
+
+func (b *Builder) extractTar(destDir string, data []byte) error {
+	tr := tar.NewReader(strings.NewReader(string(data)))
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+
+		target := filepath.Join(destDir, header.Name)
+		target = filepath.FromSlash(target)
+		if header.Typeflag == tar.TypeDir {
+			if err := os.MkdirAll(target, 0755); err != nil {
+				return err
+			}
+		} else {
+			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+				return err
+			}
+			outFile, err := os.Create(target)
+			if err != nil {
+				return err
+			}
+			if _, err := io.Copy(outFile, tr); err != nil {
+				outFile.Close()
+				return err
+			}
+			outFile.Close()
+			os.Chmod(target, 0644)
+		}
+	}
+	return nil
 }
 
 func parseName(ref string) string {

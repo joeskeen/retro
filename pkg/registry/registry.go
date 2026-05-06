@@ -35,8 +35,13 @@ func (r *Registry) ListImages() ([]string, error) {
 
 	var images []string
 	for _, entry := range entries {
-		if entry.IsDir() {
-			images = append(images, entry.Name())
+		if entry.IsDir() && entry.Name() != "layers" && entry.Name() != "git" {
+			subEntries, _ := os.ReadDir(filepath.Join(r.Path, entry.Name()))
+			for _, sub := range subEntries {
+				if sub.IsDir() {
+					images = append(images, entry.Name()+":"+sub.Name())
+				}
+			}
 		}
 	}
 	return images, nil
