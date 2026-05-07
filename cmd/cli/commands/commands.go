@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/user"
@@ -353,7 +354,28 @@ func RunPull() error {
 		return fmt.Errorf("manifest not found: %w", err)
 	}
 
+	var m struct {
+		Layers []string `json:"layers"`
+	}
+	json.Unmarshal(data, &m)
+
 	registryPath := getRegistryPath()
+	layersPath := filepath.Join(registryPath, "layers")
+	if err := os.MkdirAll(layersPath, 0755); err != nil {
+		return fmt.Errorf("failed to create layers dir: %w", err)
+	}
+
+	for _, layerSHA := range m.Layers {
+		layerData, err := t.GetLayer(layerSHA)
+		if err != nil {
+			continue
+		}
+		layerPath := filepath.Join(layersPath, layerSHA+".layer")
+		if err := os.WriteFile(layerPath, layerData, 0644); err != nil {
+			fmt.Printf("Warning: failed to save layer %s: %v\n", layerSHA[:8], err)
+		}
+	}
+
 	manifestPath := filepath.Join(registryPath, name, tag, "manifest.json")
 	if err := os.MkdirAll(filepath.Dir(manifestPath), 0755); err != nil {
 		return fmt.Errorf("failed to create manifest dir: %w", err)

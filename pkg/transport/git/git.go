@@ -55,6 +55,12 @@ func (t *Transport) CloneOrOpen() error {
 		if err != nil {
 			return fmt.Errorf("git clone failed: %s", string(out))
 		}
+
+		cmd = exec.Command("git", "-C", t.localPath, "lfs", "pull")
+		if keyName := findDeployKey(t.remoteURL); keyName != "" {
+			cmd.Env = append(os.Environ(), "GIT_SSH_COMMAND=ssh -i ~/.ssh/"+keyName+" -o StrictHostKeyChecking=no")
+		}
+		cmd.Run()
 	}
 
 	if _, err := os.Stat(gitDir); os.IsNotExist(err) {
@@ -125,27 +131,6 @@ func (t *Transport) ensureLFS() error {
 }
 
 func (t *Transport) migrateLFS() error {
-	layersPath := filepath.Join(t.localPath, "layers")
-	entries, err := os.ReadDir(layersPath)
-	if err != nil {
-		return nil
-	}
-
-	converted := 0
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".layer") {
-			continue
-		}
-		layerPath := filepath.Join(layersPath, entry.Name())
-		convertedNow, err := t.convertToLFS(layerPath)
-		if err != nil {
-			return fmt.Errorf("failed to convert %s to LFS: %w", entry.Name(), err)
-		}
-		if convertedNow {
-			converted++
-		}
-	}
-	fmt.Printf("[git transport] Converted %d layers to LFS pointers\n", converted)
 	return nil
 }
 
@@ -161,6 +146,11 @@ func (t *Transport) convertToLFS(path string) (bool, error) {
 
 	oid := sha256Hash(data)
 	size := len(data)
+
+	cmd := exec.Command("git", "-C", t.localPath, "lfs", "track", filepath.Base(path))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return false, fmt.Errorf("git lfs track failed: %s", string(out))
+	}
 
 	pointer := fmt.Sprintf("version https://git-lfs.github.com/spec/v1\noid sha256:%s\nsize %d\n", oid, size)
 	err = os.WriteFile(path, []byte(pointer), 0644)
@@ -212,6 +202,17 @@ func (t *Transport) Push() error {
 		}
 	}
 
+	cmd = exec.Command("git", "-C", t.localPath, "lfs", "push", "--all", "origin")
+	if keyName := findDeployKey(t.remoteURL); keyName != "" {
+		cmd.Env = append(os.Environ(), "GIT_SSH_COMMAND=ssh -i ~/.ssh/"+keyName+" -o StrictHostKeyChecking=no")
+	}
+	cmd.Env = append(cmd.Env, "GIT_TERMINAL_PROMPT=0")
+	lfsOut, lfsErr := cmd.CombinedOutput()
+	if lfsErr != nil {
+		return fmt.Errorf("git lfs push failed: %s", string(lfsOut))
+	}
+	fmt.Printf("[git transport] LFS content uploaded\n")
+
 	cmd = exec.Command("git", "-C", t.localPath, "push", "--force")
 	if keyName := findDeployKey(t.remoteURL); keyName != "" {
 		cmd.Env = append(os.Environ(), "GIT_SSH_COMMAND=ssh -i ~/.ssh/"+keyName+" -o StrictHostKeyChecking=no")
@@ -236,6 +237,13 @@ func (t *Transport) Pull() error {
 	if err != nil {
 		return fmt.Errorf("git pull failed: %s", string(out))
 	}
+
+	cmd = exec.Command("git", "-C", t.localPath, "lfs", "pull")
+	if keyName := findDeployKey(t.remoteURL); keyName != "" {
+		cmd.Env = append(os.Environ(), "GIT_SSH_COMMAND=ssh -i ~/.ssh/"+keyName+" -o StrictHostKeyChecking=no")
+	}
+	cmd.Run()
+
 	return nil
 }
 
